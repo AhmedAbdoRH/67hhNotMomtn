@@ -4,13 +4,20 @@ import { SimulationAudioEngine } from './simulation/audioEngine';
 import { clamp01, createInitialPhysiology, stepPhysiology } from './simulation/physiology';
 import { AnatomyRenderer, screenToNormalized } from './simulation/renderer';
 import { createInitialTissueMesh, detectAnatomicalZone, stepTissueMesh } from './simulation/tissuePhysics';
-import { stepGuidedPosition, type DirectionalInput } from './simulation/tools';
+import {
+  createInitialVerticalRod,
+  hitTestVerticalRod,
+  stepGuidedPosition,
+  stepVerticalRod,
+  type DirectionalInput,
+} from './simulation/tools';
 import type {
   AnatomicalZone,
   PhysiologicalState,
   PointerContact,
   TactileToolId,
   TissueMeshState,
+  VerticalRodState,
 } from './simulation/types';
 
 const PRESSURE_MAP: Record<PressureLevel, number> = {
@@ -25,6 +32,7 @@ export default function App() {
 
   const physiologyRef = useRef<PhysiologicalState>(createInitialPhysiology());
   const meshRef = useRef<TissueMeshState>(createInitialTissueMesh());
+  const rodRef = useRef<VerticalRodState>(createInitialVerticalRod());
   const contactRef = useRef<PointerContact>({
     active: false,
     x: 0,
@@ -44,6 +52,7 @@ export default function App() {
   const lastHoverCaressRef = useRef(0);
   const pointerHoverRef = useRef<{ x: number; y: number } | null>(null);
   const directionalKeysRef = useRef<DirectionalInput>({ left: false, right: false, up: false, down: false });
+  const tiltKeysRef = useRef<{ ccw: boolean; cw: boolean }>({ ccw: false, cw: false });
   const shiftHeldRef = useRef(false);
 
   const rendererRef = useRef<AnatomyRenderer | null>(null);
@@ -55,6 +64,7 @@ export default function App() {
   const [showReadout, setShowReadout] = useState(false);
   const [pressureLevel, setPressureLevel] = useState<PressureLevel>('moderate');
   const [muted, setMuted] = useState(false);
+  const [rodCursor, setRodCursor] = useState<'pointer' | 'grab' | 'grabbing'>('pointer');
   const [uiPhysiology, setUiPhysiology] = useState<PhysiologicalState>(() => physiologyRef.current);
   const [uiIntroitusSwelling, setUiIntroitusSwelling] = useState(0);
   const [uiExternalSwelling, setUiExternalSwelling] = useState(0);
@@ -84,9 +94,34 @@ export default function App() {
     return clamp01(base + shiftBoost);
   }, []);
 
+  const syncDomDatasets = useCallback(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const p = physiologyRef.current;
+    const m = meshRef.current;
+    const r = rodRef.current;
+    const c = contactRef.current;
+    el.dataset.congestion = p.congestion.toFixed(2);
+    el.dataset.moisture = p.moisture.toFixed(2);
+    el.dataset.arousal = p.arousal.toFixed(2);
+    el.dataset.discomfort = p.discomfort.toFixed(2);
+    el.dataset.introitusSwelling = m.introitusSwelling.toFixed(2);
+    el.dataset.externalSwelling = m.externalSwelling.toFixed(2);
+    el.dataset.peakProgress = p.peakProgress.toFixed(2);
+    el.dataset.peakActive = p.peakReleaseTimer > 0 ? 'true' : 'false';
+    el.dataset.emissionCount = String(p.emissionCount);
+    el.dataset.zone = c.active ? c.zone : hoveredZoneRef.current;
+    el.dataset.tool = activeToolRef.current;
+    el.dataset.rodHeld = r.held ? 'true' : 'false';
+    el.dataset.rodX = r.x.toFixed(2);
+    el.dataset.rodY = r.y.toFixed(2);
+    el.dataset.rodAngle = r.angle.toFixed(2);
+  }, []);
+
   const handleReset = useCallback(() => {
     physiologyRef.current = createInitialPhysiology();
     meshRef.current = createInitialTissueMesh();
+    rodRef.current = createInitialVerticalRod();
     contactRef.current = {
       active: false,
       x: 0,
@@ -105,11 +140,14 @@ export default function App() {
     lastHoverCaressRef.current = 0;
     pointerHoverRef.current = null;
     directionalKeysRef.current = { left: false, right: false, up: false, down: false };
+    tiltKeysRef.current = { ccw: false, cw: false };
+    setRodCursor('pointer');
     setUiPhysiology(physiologyRef.current);
     setUiIntroitusSwelling(0);
     setUiExternalSwelling(0);
     setUiZone('none');
-  }, []);
+    syncDomDatasets();
+  }, [syncDomDatasets]);
 
   const handleToggleMute = useCallback(() => {
     const audio = audioRef.current;
@@ -131,10 +169,16 @@ export default function App() {
     contactRef.current.tool = tool;
     setShowFinger(true);
     showFingerRef.current = true;
-    if (!pointerHoverRef.current && !contactRef.current.active) {
+    rodRef.current.held = false;
+    if (tool !== 'rod' && Math.abs(rodRef.current.x) < 0.28) {
+      // Park rod back at side dock when switching to another tool over the center
+      rodRef.current = createInitialVerticalRod();
+    }
+    if (tool !== 'rod' && !pointerHoverRef.current && !contactRef.current.active) {
       pointerHoverRef.current = { x: -0.14, y: 0.04 };
     }
-  }, []);
+    syncDomDatasets();
+  }, [syncDomDatasets]);
 
   useEffect(() => {
     rendererRef.current = new AnatomyRenderer();
@@ -161,11 +205,27 @@ export default function App() {
       return false;
     };
 
+    const updateTiltKey = (key: string, pressed: boolean): boolean => {
+      const lower = key.toLowerCase();
+      if (lower === 'q' || key === '[') {
+        tiltKeysRef.current.ccw = pressed;
+        return true;
+      }
+      if (lower === 'e' || key === ']') {
+        tiltKeysRef.current.cw = pressed;
+        return true;
+      }
+      return false;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') {
         shiftHeldRef.current = true;
         contactRef.current.pressure = clamp01(PRESSURE_MAP[pressureLevelRef.current] + 0.36);
       } else if (updateDirectionKey(e.key, true)) {
+        audioRef.current?.initOnGesture();
+        e.preventDefault();
+      } else if (updateTiltKey(e.key, true)) {
         audioRef.current?.initOnGesture();
         e.preventDefault();
       }
@@ -176,6 +236,7 @@ export default function App() {
         contactRef.current.pressure = PRESSURE_MAP[pressureLevelRef.current];
       } else {
         updateDirectionKey(e.key, false);
+        updateTiltKey(e.key, false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -227,31 +288,64 @@ export default function App() {
       const contact = contactRef.current;
       contact.tool = activeToolRef.current;
 
-      // Support continuous directional steering with Arrow / WASD keys
       const dirs = directionalKeysRef.current;
-      if (dirs.left || dirs.right || dirs.up || dirs.down) {
-        const origin = contact.active
-          ? { x: contact.x, y: contact.y }
-          : pointerHoverRef.current ?? { x: -0.14, y: 0.04 };
-        const stepped = stepGuidedPosition(origin, dirs, dt);
+      const hasDirInput = dirs.left || dirs.right || dirs.up || dirs.down;
+      const rawTiltInput = (tiltKeysRef.current.cw ? 1 : 0) - (tiltKeysRef.current.ccw ? 1 : 0);
+      const tiltInput = rodRef.current.held || activeToolRef.current === 'rod' ? rawTiltInput : 0;
+
+      // Step graspable vertical rod orientation & steering
+      if (rodRef.current.held) {
+        rodRef.current = stepVerticalRod(rodRef.current, {
+          dt,
+          pointerPos: pointerHoverRef.current,
+          tiltInput,
+        });
         contact.active = true;
-        contact.x = stepped.x;
-        contact.y = stepped.y;
-        contact.vx = stepped.vx;
-        contact.vy = stepped.vy;
-        contact.pressure = clamp01(PRESSURE_MAP[pressureLevelRef.current] + (shiftHeldRef.current ? 0.36 : 0));
-        pointerHoverRef.current = { x: stepped.x, y: stepped.y };
+        contact.x = rodRef.current.x;
+        contact.y = rodRef.current.y;
+        contact.vx = rodRef.current.vx;
+        contact.vy = rodRef.current.vy;
         lastHoverCaressRef.current = now;
-      } else if (!pointerDownRef.current && contact.active && now - lastHoverCaressRef.current > 240) {
-        // End hover-glide caress smoothly once pointer/keyboard stops moving
-        contact.active = false;
-        contact.vx = 0;
-        contact.vy = 0;
-        contact.zone = 'none';
-        contact.isDirectGlans = false;
-      } else if (lastPointerPosRef.current && now - lastPointerPosRef.current.time > 32) {
-        contact.vx *= Math.exp(-dt * 14);
-        contact.vy *= Math.exp(-dt * 14);
+      } else if (activeToolRef.current === 'rod' && (hasDirInput || tiltInput !== 0)) {
+        rodRef.current = stepVerticalRod(rodRef.current, {
+          dt,
+          directional: dirs,
+          tiltInput,
+        });
+        contact.active = true;
+        contact.x = rodRef.current.x;
+        contact.y = rodRef.current.y;
+        contact.vx = rodRef.current.vx;
+        contact.vy = rodRef.current.vy;
+        contact.pressure = clamp01(PRESSURE_MAP[pressureLevelRef.current] + (shiftHeldRef.current ? 0.36 : 0));
+        lastHoverCaressRef.current = now;
+      } else {
+        // Gentle velocity damping & tilt smoothing on resting rod
+        rodRef.current = stepVerticalRod(rodRef.current, { dt, tiltInput });
+
+        if (hasDirInput) {
+          const origin = contact.active
+            ? { x: contact.x, y: contact.y }
+            : pointerHoverRef.current ?? { x: -0.14, y: 0.04 };
+          const stepped = stepGuidedPosition(origin, dirs, dt);
+          contact.active = true;
+          contact.x = stepped.x;
+          contact.y = stepped.y;
+          contact.vx = stepped.vx;
+          contact.vy = stepped.vy;
+          contact.pressure = clamp01(PRESSURE_MAP[pressureLevelRef.current] + (shiftHeldRef.current ? 0.36 : 0));
+          pointerHoverRef.current = { x: stepped.x, y: stepped.y };
+          lastHoverCaressRef.current = now;
+        } else if (!pointerDownRef.current && contact.active && now - lastHoverCaressRef.current > 240) {
+          contact.active = false;
+          contact.vx = 0;
+          contact.vy = 0;
+          contact.zone = 'none';
+          contact.isDirectGlans = false;
+        } else if (lastPointerPosRef.current && now - lastPointerPosRef.current.time > 32) {
+          contact.vx *= Math.exp(-dt * 14);
+          contact.vy *= Math.exp(-dt * 14);
+        }
       }
 
       // Refresh zone hit-test against live deformed tissue mesh
@@ -286,25 +380,14 @@ export default function App() {
         showFingerRef.current,
         pointerHoverRef.current,
         activeToolRef.current,
+        rodRef.current,
       );
 
       // Sync DOM data attributes & throttled UI state (~10Hz) for arousal meter & readout
       uiSyncAccum += dt;
       if (uiSyncAccum >= 0.1) {
         uiSyncAccum = 0;
-        if (mainRef.current) {
-          mainRef.current.dataset.congestion = nextPhys.congestion.toFixed(2);
-          mainRef.current.dataset.moisture = nextPhys.moisture.toFixed(2);
-          mainRef.current.dataset.arousal = nextPhys.arousal.toFixed(2);
-          mainRef.current.dataset.discomfort = nextPhys.discomfort.toFixed(2);
-          mainRef.current.dataset.introitusSwelling = meshRef.current.introitusSwelling.toFixed(2);
-          mainRef.current.dataset.externalSwelling = meshRef.current.externalSwelling.toFixed(2);
-          mainRef.current.dataset.peakProgress = nextPhys.peakProgress.toFixed(2);
-          mainRef.current.dataset.peakActive = nextPhys.peakReleaseTimer > 0 ? 'true' : 'false';
-          mainRef.current.dataset.emissionCount = String(nextPhys.emissionCount);
-          mainRef.current.dataset.zone = contact.active ? contact.zone : hoveredZoneRef.current;
-          mainRef.current.dataset.tool = activeToolRef.current;
-        }
+        syncDomDatasets();
         setUiPhysiology(nextPhys);
         setUiIntroitusSwelling(meshRef.current.introitusSwelling);
         setUiExternalSwelling(meshRef.current.externalSwelling);
@@ -314,7 +397,7 @@ export default function App() {
       }
 
       const renderMs = performance.now() - frameStart;
-      const isIdle = !contact.active && nextPhys.pauseDuration > 1.5;
+      const isIdle = !contact.active && !rodRef.current.held && nextPhys.pauseDuration > 1.5;
       const yieldMs = isIdle ? 40 : renderMs > 8 ? 22 : 10;
       timerId = window.setTimeout(() => {
         if (!disposed) rafId = requestAnimationFrame(frame);
@@ -329,7 +412,7 @@ export default function App() {
       if (timerId !== null) clearTimeout(timerId);
       observer.disconnect();
     };
-  }, []);
+  }, [syncDomDatasets]);
 
   const updatePointerCoordinates = (e: React.PointerEvent<HTMLCanvasElement>, isDown: boolean) => {
     const canvas = canvasRef.current;
@@ -338,11 +421,59 @@ export default function App() {
     const norm = screenToNormalized(e.clientX, e.clientY, rect);
     const now = performance.now();
 
-    const hit = detectAnatomicalZone(norm.x, norm.y, meshRef.current);
-    hoveredZoneRef.current = hit.zone;
+    const rod = rodRef.current;
+    const isHoveringRod = showFingerRef.current && hitTestVerticalRod(norm.x, norm.y, rod);
+    rod.hovered = isHoveringRod;
+
+    if (rod.held) {
+      setRodCursor('grabbing');
+    } else if (isHoveringRod) {
+      setRodCursor('grab');
+    } else {
+      setRodCursor('pointer');
+    }
 
     const insidePelvicSkinField = Math.abs(norm.x) < 0.84 && norm.y > -0.86 && norm.y < 0.84;
     pointerHoverRef.current = insidePelvicSkinField || isDown ? { x: norm.x, y: norm.y } : null;
+
+    if (rod.held && isDown) {
+      const targetX = Math.max(-0.75, Math.min(0.75, norm.x - rod.grabOffsetX));
+      const targetY = Math.max(-0.74, Math.min(0.74, norm.y - rod.grabOffsetY));
+      let vx = 0;
+      let vy = 0;
+      const prev = lastPointerPosRef.current;
+      if (prev) {
+        const dt = Math.max(0.004, (now - prev.time) / 1000);
+        const instVx = (targetX - rod.x) / dt;
+        const instVy = (targetY - rod.y) / dt;
+        vx = rod.vx * 0.45 + instVx * 0.55;
+        vy = rod.vy * 0.45 + instVy * 0.55;
+      }
+      lastPointerPosRef.current = { x: norm.x, y: norm.y, time: now };
+      rod.x = targetX;
+      rod.y = targetY;
+      rod.vx = vx;
+      rod.vy = vy;
+
+      const hit = detectAnatomicalZone(rod.x, rod.y, meshRef.current);
+      hoveredZoneRef.current = hit.zone;
+      contactRef.current = {
+        ...contactRef.current,
+        active: true,
+        x: rod.x,
+        y: rod.y,
+        vx,
+        vy,
+        pressure: getEffectivePressure(e.pressure, e.pointerType),
+        zone: hit.zone,
+        isDirectGlans: hit.isDirectGlans,
+        tool: 'rod',
+      };
+      return;
+    }
+
+    const hit = detectAnatomicalZone(norm.x, norm.y, meshRef.current);
+    hoveredZoneRef.current = hit.zone;
 
     let vx = 0;
     let vy = 0;
@@ -370,7 +501,7 @@ export default function App() {
         zone: hit.zone,
         isDirectGlans: hit.isDirectGlans,
       };
-    } else if (insidePelvicSkinField && speed > 0.015) {
+    } else if (activeToolRef.current !== 'rod' && !isHoveringRod && insidePelvicSkinField && speed > 0.015) {
       // Feather-light surface caress when gliding across the pelvic skin, vulva, or clitoris
       lastHoverCaressRef.current = now;
       contactRef.current = {
@@ -392,7 +523,35 @@ export default function App() {
     pointerDownRef.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     lastPointerPosRef.current = null;
+
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const norm = screenToNormalized(e.clientX, e.clientY, rect);
+      const rod = rodRef.current;
+
+      if (showFingerRef.current && hitTestVerticalRod(norm.x, norm.y, rod)) {
+        // Grasp/hold the vertical elongated shape directly at pointer anchor
+        rod.held = true;
+        rod.grabOffsetX = norm.x - rod.x;
+        rod.grabOffsetY = norm.y - rod.y;
+        setActiveTool('rod');
+        activeToolRef.current = 'rod';
+        contactRef.current.tool = 'rod';
+        setRodCursor('grabbing');
+      } else if (activeToolRef.current === 'rod') {
+        // When Vertical Rod tool is already selected, clicking/dragging on anatomy steers the rod there
+        rod.held = true;
+        rod.grabOffsetX = 0;
+        rod.grabOffsetY = 0;
+        rod.x = Math.max(-0.75, Math.min(0.75, norm.x));
+        rod.y = Math.max(-0.74, Math.min(0.74, norm.y));
+        setRodCursor('grabbing');
+      }
+    }
+
     updatePointerCoordinates(e, true);
+    syncDomDatasets();
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -402,6 +561,10 @@ export default function App() {
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     pointerDownRef.current = false;
+    rodRef.current.held = false;
+    rodRef.current.vx = 0;
+    rodRef.current.vy = 0;
+    setRodCursor(rodRef.current.hovered ? 'grab' : 'pointer');
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -414,10 +577,13 @@ export default function App() {
       isDirectGlans: false,
     };
     lastPointerPosRef.current = null;
+    syncDomDatasets();
   };
 
   const handlePointerLeave = () => {
     if (!pointerDownRef.current) {
+      rodRef.current.hovered = false;
+      setRodCursor('pointer');
       contactRef.current = {
         ...contactRef.current,
         active: false,
@@ -443,6 +609,13 @@ export default function App() {
     }
   };
 
+  const cursorClass =
+    rodCursor === 'grabbing'
+      ? 'cursor-grabbing'
+      : rodCursor === 'grab'
+        ? 'cursor-grab'
+        : 'cursor-pointer';
+
   return (
     <main
       ref={mainRef}
@@ -457,6 +630,10 @@ export default function App() {
       data-emission-count="0"
       data-zone="none"
       data-tool="finger"
+      data-rod-held="false"
+      data-rod-x="0.42"
+      data-rod-y="0.06"
+      data-rod-angle="0.00"
       className="relative h-screen w-screen overflow-hidden bg-[#0e0c0d]"
     >
       <canvas
@@ -469,7 +646,7 @@ export default function App() {
         onPointerCancel={handlePointerUp}
         onPointerLeave={handlePointerLeave}
         onWheel={handleWheel}
-        className="block h-full w-full cursor-pointer touch-none"
+        className={`block h-full w-full touch-none ${cursorClass}`}
       />
 
       <StudioOverlay

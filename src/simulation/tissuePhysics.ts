@@ -287,7 +287,11 @@ function stepChainSprings(
       const toolProfile = getToolProfile(contact.tool);
       const dxToNode = node.x - contact.x;
       const dyToNode = node.y - contact.y;
-      const dist = Math.hypot(dxToNode, dyToNode);
+      const clampedSegDy = toolProfile.id === 'rod'
+        ? Math.max(-0.115, Math.min(0.115, dyToNode))
+        : 0;
+      const effDyToNode = dyToNode - clampedSegDy;
+      const dist = Math.hypot(dxToNode, effDyToNode);
 
       // Asymmetrical side isolation: only strongly affect nodes near cursor, never mirror to opposite side
       const influenceRadius = toolProfile.influenceRadius;

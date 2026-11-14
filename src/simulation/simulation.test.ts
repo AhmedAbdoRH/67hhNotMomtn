@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInitialPhysiology, stepPhysiology, computeSurfaceFriction } from './physiology';
 import { createInitialTissueMesh, stepTissueMesh, detectAnatomicalZone } from './tissuePhysics';
-import { stepGuidedPosition } from './tools';
+import {
+  createInitialVerticalRod,
+  hitTestVerticalRod,
+  stepGuidedPosition,
+  stepVerticalRod,
+} from './tools';
 import type { PointerContact } from './types';
 
 function makeContact(overrides: Partial<PointerContact> = {}): PointerContact {
@@ -543,4 +548,72 @@ test('selectable tactile tools produce distinct physiological responses and dire
     return phys.discomfort;
   };
   assert.ok(runDryFast('brush') < runDryFast('probe') * 0.45, 'expected brush discomfort << probe discomfort on dry fast vestibule pass');
+});
+
+test('vertical elongated rod can be hit-tested, grasped with offset, steered, tilted, and deforms tissue along vertical span', () => {
+  const rod = createInitialVerticalRod();
+  assert.equal(rod.angle, 0);
+  assert.equal(rod.held, false);
+  assert.ok(rod.halfLength > rod.radius * 4, 'rod should be clearly elongated vertically');
+
+  // 1. Capsule hit-testing along vertical shaft
+  assert.equal(hitTestVerticalRod(rod.x, rod.y, rod), true);
+  assert.equal(hitTestVerticalRod(rod.x, rod.y - rod.halfLength + 0.02, rod), true);
+  assert.equal(hitTestVerticalRod(rod.x, rod.y + rod.halfLength - 0.02, rod), true);
+  assert.equal(hitTestVerticalRod(rod.x + 0.25, rod.y, rod), false);
+
+  // 2. Grasping with anchor offset preserves relative hold point during drag
+  const heldRod = {
+    ...rod,
+    held: true,
+    grabOffsetX: 0.01,
+    grabOffsetY: 0.08,
+  };
+  const dragged = stepVerticalRod(heldRod, {
+    dt: 0.02,
+    pointerPos: { x: 0.01, y: 0.12 },
+  });
+  assert.ok(Math.abs(dragged.x - 0) < 1e-6);
+  assert.ok(Math.abs(dragged.y - 0.04) < 1e-6);
+  assert.ok(dragged.vx < 0, 'dragging left from 0.42 to 0 should yield negative vx');
+
+  // 3. Directional steering & tilt clamping
+  let steered = { ...rod };
+  for (let i = 0; i < 40; i++) {
+    steered = stepVerticalRod(steered, {
+      dt: 0.03,
+      directional: { left: true, right: false, up: true, down: false },
+      tiltInput: 1,
+    });
+  }
+  assert.ok(steered.x < rod.x - 0.2, 'directional left should steer rod toward midline');
+  assert.ok(steered.y < rod.y - 0.2, 'directional up should steer rod superiorly');
+  assert.ok(steered.steerAngle > 0.2 && steered.steerAngle <= 0.48, `expected clamped tilt, got ${steered.steerAngle}`);
+
+  // 4. Elongated vertical contact at midline cleft parts multiple vertical majora nodes symmetrically
+  let mesh = createInitialTissueMesh();
+  const phys = createInitialPhysiology();
+  for (let i = 0; i < 20; i++) {
+    mesh = stepTissueMesh(
+      mesh,
+      phys,
+      makeContact({
+        active: true,
+        x: 0,
+        y: 0.06,
+        vx: 0,
+        vy: 0.15,
+        pressure: 0.55,
+        zone: 'vestibule',
+        tool: 'rod',
+      }),
+      0.02,
+    );
+  }
+  const upperGap = mesh.majoraRight[2].x - mesh.majoraLeft[2].x;
+  const lowerGap = mesh.majoraRight[4].x - mesh.majoraLeft[4].x;
+  const restUpperGap = mesh.majoraRight[2].restX - mesh.majoraLeft[2].restX;
+  const restLowerGap = mesh.majoraRight[4].restX - mesh.majoraLeft[4].restX;
+  assert.ok(upperGap > restUpperGap + 0.02, 'expected vertical rod to part upper cleft nodes');
+  assert.ok(lowerGap > restLowerGap + 0.015, 'expected vertical rod to part lower cleft nodes');
 });

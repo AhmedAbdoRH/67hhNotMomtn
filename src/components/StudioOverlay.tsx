@@ -10,6 +10,7 @@ import {
   CircleDot,
   Eye,
   EyeOff,
+  RectangleVertical,
 } from 'lucide-react';
 import { TACTILE_TOOLS, TACTILE_TOOL_ORDER } from '../simulation/tools';
 import type { AnatomicalZone, PhysiologicalState, TactileToolId } from '../simulation/types';
@@ -36,6 +37,7 @@ const TOOL_ICONS = {
   brush: Feather,
   palm: Sun,
   probe: CircleDot,
+  rod: RectangleVertical,
 } as const;
 
 interface StudioOverlayProps {
@@ -318,7 +320,7 @@ export function StudioOverlay({
         </div>
 
         <p className="hidden text-xs text-stone-500 sm:block">
-          Guide with mouse, touch, or Arrow / WASD keys · Shift/scroll for force
+          Drag vertical rod or guide with Arrow / WASD · Q/E to tilt · Shift/scroll for force
         </p>
       </div>
     </div>

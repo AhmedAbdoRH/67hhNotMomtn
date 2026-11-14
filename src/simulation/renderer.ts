@@ -6,6 +6,7 @@ import type {
   SpringNode,
   TactileToolId,
   TissueMeshState,
+  VerticalRodState,
 } from './types';
 
 export interface ViewportTransform {
@@ -223,6 +224,7 @@ export class AnatomyRenderer {
     showFinger = true,
     hoverPos: { x: number; y: number } | null = null,
     activeTool: TactileToolId = 'finger',
+    rod: VerticalRodState | null = null,
   ) {
     this.ensurePatterns(ctx);
     const vt = computeViewportTransform(width, height);
@@ -268,11 +270,14 @@ export class AnatomyRenderer {
     ctx.fillStyle = vig;
     ctx.fillRect(0, 0, width, height);
 
-    // 8. Subtle Tactile Contact Caliper Ring & Active External Surface Tool
+    // 8. Subtle Tactile Contact Caliper Ring, Graspable Vertical Rod & Active Surface Tool
     if (contact.active || hoveredZone !== 'none') {
       this.drawContactCue(ctx, vt, contact, physiology.discomfort);
     }
-    if (showFinger && (contact.active || hoverPos !== null)) {
+    if (showFinger && rod) {
+      this.drawVerticalRod(ctx, vt, rod, contact, physiology.discomfort, activeTool === 'rod');
+    }
+    if (showFinger && activeTool !== 'rod' && (contact.active || hoverPos !== null)) {
       this.drawSurfaceTool(ctx, vt, contact, hoverPos, physiology.discomfort, activeTool);
     }
 
@@ -1223,6 +1228,123 @@ export class AnatomyRenderer {
       return;
     }
     this.drawSurfaceTouchFinger(ctx, vt, contact, hoverPos, discomfort);
+  }
+
+  private drawVerticalRod(
+    ctx: CanvasRenderingContext2D,
+    vt: ViewportTransform,
+    rod: VerticalRodState,
+    contact: PointerContact,
+    discomfort: number,
+    isRodSelected: boolean,
+  ) {
+    const cx = vt.centerX + rod.x * vt.scale;
+    const cy = vt.centerY + rod.y * vt.scale;
+    const r = rod.radius * vt.scale;
+    const halfLen = rod.halfLength * vt.scale;
+    const isActive = rod.held || (isRodSelected && contact.active);
+    const pressure = isActive ? contact.pressure : 0.14;
+    const liftPx = (isActive ? (1 - pressure) * 0.008 : 0.026) * vt.scale;
+
+    ctx.save();
+
+    // 1. Soft studio drop shadow onto skin surface
+    ctx.save();
+    ctx.translate(cx + liftPx * 0.55, cy + liftPx * 0.65);
+    ctx.rotate(rod.angle);
+    const shadowGrad = ctx.createRadialGradient(0, 0, r * 0.35, 0, 0, halfLen * 1.18);
+    shadowGrad.addColorStop(0, `rgba(18, 6, 8, ${(isActive ? 0.36 + pressure * 0.18 : 0.22).toFixed(3)})`);
+    shadowGrad.addColorStop(0.65, `rgba(18, 6, 8, ${(isActive ? 0.18 : 0.10).toFixed(3)})`);
+    shadowGrad.addColorStop(1, 'rgba(18, 6, 8, 0)');
+    ctx.fillStyle = shadowGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.85, halfLen * 1.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Elongated vertical cylindrical capsule body
+    ctx.translate(cx + liftPx * 0.18, cy - liftPx * 0.25);
+    ctx.rotate(rod.angle);
+
+    const w = r * 2;
+    const h = halfLen * 2;
+    ctx.beginPath();
+    ctx.roundRect(-r, -halfLen, w, h, r);
+
+    // 3D cylindrical studio shading (upper-left key light -> soft satin wrap)
+    const bodyGrad = ctx.createLinearGradient(-r, 0, r, 0);
+    const baseAlpha = isActive ? 0.88 : rod.hovered ? 0.82 : isRodSelected ? 0.78 : 0.72;
+    bodyGrad.addColorStop(0, `rgba(214, 198, 194, ${baseAlpha.toFixed(3)})`);
+    bodyGrad.addColorStop(0.28, `rgba(250, 242, 238, ${Math.min(0.95, baseAlpha + 0.08).toFixed(3)})`);
+    bodyGrad.addColorStop(0.66, `rgba(218, 200, 196, ${baseAlpha.toFixed(3)})`);
+    bodyGrad.addColorStop(1, `rgba(154, 134, 132, ${baseAlpha.toFixed(3)})`);
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+
+    // Vertical tonal taper so distal tip feels smoothly contoured
+    const vertGrad = ctx.createLinearGradient(0, -halfLen, 0, halfLen);
+    vertGrad.addColorStop(0, 'rgba(255, 250, 248, 0.24)');
+    vertGrad.addColorStop(0.22, 'rgba(255, 250, 248, 0.02)');
+    vertGrad.addColorStop(0.85, 'rgba(72, 52, 54, 0.10)');
+    vertGrad.addColorStop(1, 'rgba(46, 30, 34, 0.22)');
+    ctx.fillStyle = vertGrad;
+    ctx.fill();
+
+    // Subtle hairline outer contour (highlights softly when hovered or held)
+    const strokeRgb = discomfort > 0.35 ? '242, 182, 168' : '255, 248, 244';
+    const strokeAlpha = rod.held ? 0.78 : rod.hovered ? 0.62 : 0.36;
+    ctx.strokeStyle = `rgba(${strokeRgb}, ${strokeAlpha})`;
+    ctx.lineWidth = rod.held || rod.hovered ? 1.5 : 1.1;
+    ctx.stroke();
+
+    // Longitudinal studio specular reflection strip along left-front curvature
+    ctx.beginPath();
+    ctx.roundRect(-r * 0.56, -halfLen + r * 0.72, r * 0.28, h - r * 1.44, r * 0.14);
+    ctx.fillStyle = `rgba(255, 254, 252, ${(isActive ? 0.44 : 0.32).toFixed(3)})`;
+    ctx.fill();
+
+    // Tactile grip collar band in center-lower shaft (communicates graspable handle)
+    const gripTop = -halfLen * 0.10;
+    const gripHeight = halfLen * 0.52;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(-r, gripTop, w, gripHeight, 2);
+    ctx.clip();
+    ctx.fillStyle = rod.held
+      ? 'rgba(132, 108, 108, 0.24)'
+      : rod.hovered
+        ? 'rgba(142, 118, 118, 0.18)'
+        : 'rgba(120, 100, 102, 0.14)';
+    ctx.fillRect(-r, gripTop, w, gripHeight);
+
+    for (let i = 0; i < 4; i++) {
+      const gy = gripTop + gripHeight * (0.2 + i * 0.2);
+      ctx.strokeStyle = rod.held ? 'rgba(255, 244, 240, 0.52)' : 'rgba(94, 72, 74, 0.34)';
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.78, gy);
+      ctx.quadraticCurveTo(0, gy + 2.5, r * 0.78, gy);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Subtle upper directional tip contour
+    ctx.beginPath();
+    ctx.ellipse(0, -halfLen + r * 0.62, r * 0.42, r * 0.26, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 252, 250, ${(isActive ? 0.34 : 0.22).toFixed(3)})`;
+    ctx.fill();
+
+    // Fine directional steering axis tick when hovered or held
+    if (rod.held || rod.hovered) {
+      ctx.strokeStyle = 'rgba(255, 248, 244, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, -halfLen - 6);
+      ctx.lineTo(0, -halfLen - 12);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   private drawSoftBrushTool(

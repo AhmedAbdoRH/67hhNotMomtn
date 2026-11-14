@@ -47,7 +47,32 @@ export interface PhysiologicalState {
   emissionCount: number;
 }
 
-export type TactileToolId = 'finger' | 'brush' | 'palm' | 'probe';
+export type TactileToolId = 'finger' | 'brush' | 'palm' | 'probe' | 'rod';
+
+export interface VerticalRodState {
+  /** Center X in normalized anatomical space (-1..1) */
+  x: number;
+  /** Center Y in normalized anatomical space (-1.25..1.25) */
+  y: number;
+  /** Velocity in normalized units / sec */
+  vx: number;
+  vy: number;
+  /** Current visual/physical tilt angle in radians (0 = strictly vertical) */
+  angle: number;
+  /** User-steered target tilt angle in radians */
+  steerAngle: number;
+  /** Half-length of the vertical elongated capsule */
+  halfLength: number;
+  /** Cross-sectional radius of the vertical capsule */
+  radius: number;
+  /** True while the user is grasping/holding the vertical shape */
+  held: boolean;
+  /** True while pointer hovers over the vertical shape */
+  hovered: boolean;
+  /** Grab anchor offset relative to rod center */
+  grabOffsetX: number;
+  grabOffsetY: number;
+}
 
 export interface PointerContact {
   active: boolean;

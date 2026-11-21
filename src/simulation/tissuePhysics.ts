@@ -491,29 +491,31 @@ export function stepTissueMesh(
     },
   ];
 
-  // Vestibule remains closed at rest; opens visibly with manual stretch, arousal relaxation, and introital bulb engorgement
+  // Vestibule remains closed at rest; opens visibly with manual stretch, arousal relaxation, introital engorgement, AND cyclic shaft insertion
   const minoraSpread = Math.max(
     0,
     mesh.minoraRight[3].x - mesh.minoraLeft[3].x - (mesh.minoraRight[3].restX - mesh.minoraLeft[3].restX),
   );
+  const insertionDepth = contact.active && contact.tool === 'rod' ? clamp01(contact.insertion ?? 0) : 0;
+  const insertionOpen = insertionDepth > 0.02 ? (0.014 + insertionDepth * 0.056) * (0.72 + 0.28 * vestibuleRelaxation) : 0;
   const stretchOpen = clamp01(minoraSpread * 3.8) * 0.046;
   const arousalOpen = clamp01((arousal - 0.18) / 0.82) * vestibuleRelaxation * 0.042;
   const introitusSwellOpen = introitusSwelling * (0.024 + 0.026 * vestibuleRelaxation);
   const naturalVestibuleOpen =
-    (stretchOpen + arousalOpen + introitusSwellOpen - totalContraction * 0.82) *
-    (0.48 + 0.52 * vestibuleRelaxation) *
-    (1 - discomfort * 0.78);
+    (stretchOpen + arousalOpen + introitusSwellOpen + insertionOpen - totalContraction * 0.82) *
+    (0.48 + 0.52 * vestibuleRelaxation + insertionDepth * 0.35) *
+    (1 - discomfort * 0.65);
   const vestibuleLeftOffsets = mesh.vestibuleLeft.map((_, idx) => {
     const bell = Math.sin((idx / (mesh.vestibuleLeft.length - 1)) * Math.PI);
     return {
-      dx: -Math.max(0, naturalVestibuleOpen) * bell,
+      dx: -Math.max(0, naturalVestibuleOpen) * bell - insertionDepth * 0.018 * bell,
       dy: breathWave * 0.35 + introitusSwelling * 0.008 * bell - totalContraction * 0.4 * bell,
     };
   });
   const vestibuleRightOffsets = mesh.vestibuleRight.map((_, idx) => {
     const bell = Math.sin((idx / (mesh.vestibuleRight.length - 1)) * Math.PI);
     return {
-      dx: Math.max(0, naturalVestibuleOpen) * bell,
+      dx: Math.max(0, naturalVestibuleOpen) * bell + insertionDepth * 0.018 * bell,
       dy: breathWave * 0.35 + introitusSwelling * 0.008 * bell - totalContraction * 0.4 * bell,
     };
   });

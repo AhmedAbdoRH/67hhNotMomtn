@@ -4,16 +4,11 @@ import {
   RotateCcw,
   Tag,
   SlidersHorizontal,
-  Hand,
-  Feather,
-  Sun,
-  CircleDot,
-  Eye,
-  EyeOff,
-  RectangleVertical,
+  Play,
+  Pause,
 } from 'lucide-react';
-import { TACTILE_TOOLS, TACTILE_TOOL_ORDER } from '../simulation/tools';
-import type { AnatomicalZone, PhysiologicalState, TactileToolId } from '../simulation/types';
+import { CADENCE_PRESETS } from '../simulation/tools';
+import type { AnatomicalZone, AutoCycleConfig, CadencePreset, PhysiologicalState } from '../simulation/types';
 
 export type PressureLevel = 'gentle' | 'moderate' | 'firm';
 
@@ -32,21 +27,17 @@ const ZONE_LABELS: Record<AnatomicalZone, string> = {
   perineum: 'Perineal body',
 };
 
-const TOOL_ICONS = {
-  finger: Hand,
-  brush: Feather,
-  palm: Sun,
-  probe: CircleDot,
-  rod: RectangleVertical,
-} as const;
+const PRESET_ORDER: CadencePreset[] = ['slow', 'harmonious', 'fast'];
+
+export type AppViewMode = 'anima' | 'split' | 'studio';
 
 interface StudioOverlayProps {
   showLabels: boolean;
   onToggleLabels: () => void;
-  showFinger: boolean;
-  onToggleFinger: () => void;
-  activeTool: TactileToolId;
-  onChangeTool: (tool: TactileToolId) => void;
+  autoCycle: AutoCycleConfig;
+  onToggleAutoCycle: () => void;
+  onSelectCadencePreset: (preset: CadencePreset) => void;
+  onChangeCycleRate: (rateHz: number) => void;
   onReset: () => void;
   pressureLevel: PressureLevel;
   onChangePressure: (level: PressureLevel) => void;
@@ -58,15 +49,17 @@ interface StudioOverlayProps {
   introitusSwelling: number;
   externalSwelling: number;
   activeZone: AnatomicalZone;
+  viewMode?: AppViewMode;
+  onChangeViewMode?: (mode: AppViewMode) => void;
 }
 
 export function StudioOverlay({
   showLabels,
   onToggleLabels,
-  showFinger,
-  onToggleFinger,
-  activeTool,
-  onChangeTool,
+  autoCycle,
+  onToggleAutoCycle,
+  onSelectCadencePreset,
+  onChangeCycleRate,
   onReset,
   pressureLevel,
   onChangePressure,
@@ -78,73 +71,88 @@ export function StudioOverlay({
   introitusSwelling,
   externalSwelling,
   activeZone,
+  viewMode,
+  onChangeViewMode,
 }: StudioOverlayProps) {
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const meterPct = Math.round(physiology.peakProgress * 100);
   const peakActive = physiology.peakReleaseTimer > 0;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-4 sm:p-6">
-      {/* Top Bar: Quiet studio controls */}
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="pointer-events-auto flex flex-col gap-2.5">
-          <div>
-            <h1 className="text-sm font-medium tracking-tight text-stone-200/90">
-              External Vulvar Anatomy
-            </h1>
-            <p className="text-xs text-stone-400/80">
-              Touch or drag directly on tissue to explore biomechanics
-            </p>
-          </div>
-
+    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between p-3.5 sm:p-5">
+      {/* Top Bar: Clean cyclic member cadence & simulator controls */}
+      <header className="flex flex-wrap items-start justify-between gap-2.5">
+        <div className="pointer-events-auto flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <div
-              role="group"
-              aria-label="Surface tactile tools"
-              className="flex flex-wrap items-center rounded-md border border-white/10 bg-[#141112]/85 p-0.5"
+            {/* Auto Play / Pause Toggle */}
+            <button
+              type="button"
+              onClick={onToggleAutoCycle}
+              aria-pressed={autoCycle.enabled}
+              className={`font-arabic inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 ${
+                autoCycle.enabled
+                  ? 'border-rose-400/50 bg-rose-400/15 text-rose-100'
+                  : 'border-white/10 bg-[#141112]/85 text-stone-300 hover:border-white/20 hover:text-stone-100'
+              }`}
             >
-              {TACTILE_TOOL_ORDER.map((toolId) => {
-                const tool = TACTILE_TOOLS[toolId];
-                const Icon = TOOL_ICONS[toolId];
-                const active = activeTool === toolId;
+              {autoCycle.enabled ? (
+                <Pause className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>{autoCycle.enabled ? 'تلقائي نشط' : 'تشغيل تلقائي'}</span>
+            </button>
+
+            {/* Cadence Mode Presets: بطيء · متناغم · سريع */}
+            <div
+              dir="rtl"
+              role="group"
+              aria-label="نمط الحركة التلقائية"
+              className="font-arabic flex items-center rounded-md border border-white/10 bg-[#141112]/85 p-0.5"
+            >
+              {PRESET_ORDER.map((presetId) => {
+                const spec = CADENCE_PRESETS[presetId];
+                const active = autoCycle.preset === presetId;
                 return (
                   <button
-                    key={toolId}
+                    key={presetId}
                     type="button"
-                    onClick={() => onChangeTool(toolId)}
+                    onClick={() => onSelectCadencePreset(presetId)}
                     aria-pressed={active}
-                    title={tool.description}
-                    className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-stone-400 ${
+                    className={`rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-amber-200 ${
                       active
-                        ? 'bg-stone-200/15 text-stone-100'
+                        ? 'bg-amber-200/20 text-amber-100'
                         : 'text-stone-400 hover:text-stone-200'
                     }`}
                   >
-                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{tool.label}</span>
+                    {spec.labelAr}
                   </button>
                 );
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={onToggleFinger}
-              aria-pressed={showFinger}
-              aria-label={showFinger ? 'Hide active tool visual' : 'Show active tool visual'}
-              title={showFinger ? 'Hide tool visual' : 'Show tool visual'}
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-400 ${
-                showFinger
-                  ? 'border-stone-400/40 bg-stone-200/10 text-stone-200'
-                  : 'border-white/10 bg-[#141112]/80 text-stone-400 hover:border-white/20 hover:text-stone-200'
-              }`}
+            {/* Adjustable Cycle Rate (Hz) */}
+            <div
+              dir="rtl"
+              className="font-arabic flex items-center gap-2 rounded-md border border-white/10 bg-[#141112]/85 px-2.5 py-1 text-xs text-stone-300"
             >
-              {showFinger ? (
-                <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-            </button>
+              <label htmlFor="cycle-rate-slider" className="whitespace-nowrap text-stone-400">
+                المعدل
+              </label>
+              <input
+                id="cycle-rate-slider"
+                type="range"
+                min={20}
+                max={220}
+                value={Math.round(autoCycle.rateHz * 100)}
+                onChange={(e) => onChangeCycleRate(Number(e.target.value) / 100)}
+                aria-label="معدل الحركة"
+                className="h-1.5 w-20 cursor-pointer accent-rose-400 sm:w-24"
+              />
+              <span className="font-mono-tabular w-11 text-left text-[11px] text-stone-200">
+                {autoCycle.rateHz.toFixed(2)}Hz
+              </span>
+            </div>
 
             <button
               type="button"
@@ -157,12 +165,13 @@ export function StudioOverlay({
               }`}
             >
               <Tag className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Anatomy Labels</span>
+              <span>Labels</span>
             </button>
 
             <button
               type="button"
               onClick={onReset}
+              aria-label="Reset simulation"
               className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-[#141112]/80 px-2.5 py-1.5 text-xs font-medium text-stone-300 whitespace-nowrap shrink-0 transition-colors hover:border-white/20 hover:text-stone-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-400"
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -171,8 +180,41 @@ export function StudioOverlay({
           </div>
         </div>
 
-        {/* Top-Right: Touch Pressure & Audio Toggle */}
-        <div className="pointer-events-auto flex items-center gap-2.5">
+        {/* Top-Right: View Switcher, Touch Pressure & Audio Toggle */}
+        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
+          {viewMode && onChangeViewMode && (
+            <div
+              dir="rtl"
+              role="group"
+              aria-label="وضع العرض"
+              className="font-arabic flex items-center rounded-md border border-amber-100/15 bg-[#141112]/90 p-0.5"
+            >
+              {(
+                [
+                  { id: 'anima', label: 'ملاذ الأنيما' },
+                  { id: 'split', label: 'عرض مزدوج' },
+                  { id: 'studio', label: 'المحاكاة' },
+                ] as const
+              ).map((item) => {
+                const active = viewMode === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChangeViewMode(item.id)}
+                    aria-pressed={active}
+                    className={`rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-amber-200 ${
+                      active
+                        ? 'bg-amber-200/20 text-amber-100'
+                        : 'text-stone-400 hover:text-stone-200'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div
             role="group"
             aria-label="Contact pressure"
@@ -320,7 +362,7 @@ export function StudioOverlay({
         </div>
 
         <p className="hidden text-xs text-stone-500 sm:block">
-          Drag vertical rod or guide with Arrow / WASD · Q/E to tilt · Shift/scroll for force
+          Drag member or Arrow/WASD · Q/E tilt · Scroll force
         </p>
       </div>
     </div>

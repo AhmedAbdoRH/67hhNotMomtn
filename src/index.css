@@ -10,10 +10,21 @@
     padding: 0;
     overflow: hidden;
     background-color: #0e0c0d;
-    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "Plus Jakarta Sans", "Cairo", -apple-system, BlinkMacSystemFont, sans-serif;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+    touch-action: manipulation;
+  }
+
+  .font-arabic {
+    font-family: "Cairo", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
   .font-mono-tabular {
@@ -21,3 +32,20 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+@keyframes anima-breathe {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.008);
+  }
+  50% {
+    transform: translate3d(0, var(--anima-breath-y, -4px), 0) scale(var(--anima-breath-scale, 1.02));
+  }
+}
+
+.anima-breath-motion {
+  animation-name: anima-breathe;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+

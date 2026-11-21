@@ -2,5 +2,5 @@
   "name": "Vulvar Biomechanics & Sensory Simulation",
   "description": "Anatomically precise interactive external vulvar biomechanics, viscoelastic tissue physics, vasocongestion, and sensory physiology simulation.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

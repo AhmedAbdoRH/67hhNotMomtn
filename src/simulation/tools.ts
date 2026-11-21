@@ -1,4 +1,4 @@
-import type { TactileToolId, VerticalRodState } from './types';
+import type { AutoCycleConfig, CadencePreset, TactileToolId, VerticalRodState } from './types';
 
 export interface TactileToolProfile {
   id: TactileToolId;
@@ -77,23 +77,59 @@ export const TACTILE_TOOLS: Record<TactileToolId, TactileToolProfile> = {
   },
   rod: {
     id: 'rod',
-    label: 'Vertical Rod',
-    description: 'Elongated vertical shape you can grasp, tilt, and guide across the tissue',
-    influenceRadius: 0.16,
-    displacementScale: 1.18,
+    label: 'Rhythmic Member',
+    description: 'Anatomical cyclic member moving automatically in and out with adjustable cadence',
+    influenceRadius: 0.17,
+    displacementScale: 1.22,
     allowHook: true,
-    pressureScale: 1.05,
-    arousalMultiplier: 1.10,
-    congestionWarmthBoost: 0.14,
-    relaxationBonus: 0.18,
-    discomfortScale: 0.78,
+    pressureScale: 1.02,
+    arousalMultiplier: 1.24,
+    congestionWarmthBoost: 0.24,
+    relaxationBonus: 0.26,
+    discomfortScale: 0.64,
   },
 };
 
-export const TACTILE_TOOL_ORDER: TactileToolId[] = ['finger', 'brush', 'palm', 'probe', 'rod'];
+export const TACTILE_TOOL_ORDER: TactileToolId[] = ['rod'];
+
+export interface CadencePresetSpec {
+  id: CadencePreset;
+  labelAr: string;
+  rateHz: number;
+  strokeDepth: number;
+}
+
+export const CADENCE_PRESETS: Record<CadencePreset, CadencePresetSpec> = {
+  slow: {
+    id: 'slow',
+    labelAr: 'بطيء',
+    rateHz: 0.38,
+    strokeDepth: 0.78,
+  },
+  harmonious: {
+    id: 'harmonious',
+    labelAr: 'متناغم',
+    rateHz: 0.82,
+    strokeDepth: 0.92,
+  },
+  fast: {
+    id: 'fast',
+    labelAr: 'سريع',
+    rateHz: 1.55,
+    strokeDepth: 1.0,
+  },
+};
+
+export function createInitialAutoCycle(): AutoCycleConfig {
+  return {
+    enabled: true,
+    preset: 'harmonious',
+    rateHz: CADENCE_PRESETS.harmonious.rateHz,
+  };
+}
 
 export function getToolProfile(tool?: TactileToolId): TactileToolProfile {
-  return tool && tool in TACTILE_TOOLS ? TACTILE_TOOLS[tool] : TACTILE_TOOLS.finger;
+  return tool && tool in TACTILE_TOOLS ? TACTILE_TOOLS[tool] : TACTILE_TOOLS.rod;
 }
 
 export interface DirectionalInput {
@@ -128,7 +164,8 @@ export function stepGuidedPosition(
   return { x: nextX, y: nextY, vx, vy, moving: true };
 }
 
-export const DEFAULT_ROD_REST_POS = { x: 0.42, y: 0.06 };
+export const INTROITUS_ENTRY_ANCHOR = { x: 0, y: 0.175 };
+export const DEFAULT_ROD_REST_POS = { x: 0, y: 0.42 };
 
 export function createInitialVerticalRod(): VerticalRodState {
   return {
@@ -138,8 +175,10 @@ export function createInitialVerticalRod(): VerticalRodState {
     vy: 0,
     angle: 0,
     steerAngle: 0,
-    halfLength: 0.18,
-    radius: 0.032,
+    halfLength: 0.25,
+    radius: 0.044,
+    insertion: 0.08,
+    cyclePhase: 0,
     held: false,
     hovered: false,
     grabOffsetX: 0,
@@ -154,7 +193,7 @@ export function hitTestVerticalRod(
   px: number,
   py: number,
   rod: VerticalRodState,
-  padding = 0.024,
+  padding = 0.028,
 ): boolean {
   const dx = px - rod.x;
   const dy = py - rod.y;
@@ -175,10 +214,14 @@ export interface VerticalRodStepInput {
   directional?: DirectionalInput;
   /** -1 = tilt counter-clockwise (Q), +1 = tilt clockwise (E), 0 = none */
   tiltInput?: number;
+  /** Optional automated cyclic insertion config */
+  autoCycle?: AutoCycleConfig;
+  /** Current arousal (0..1) subtly deepens harmonious rhythm */
+  arousal?: number;
 }
 
 /**
- * Updates the graspable vertical elongated rod's position, velocity, and steering tilt.
+ * Updates the graspable & cyclic member's insertion depth, position, velocity, and steering tilt.
  */
 export function stepVerticalRod(rod: VerticalRodState, input: VerticalRodStepInput): VerticalRodState {
   const safeDt = Math.min(Math.max(input.dt, 0), 0.05);
@@ -188,6 +231,13 @@ export function stepVerticalRod(rod: VerticalRodState, input: VerticalRodStepInp
   let nextY = rod.y;
   let vx = 0;
   let vy = 0;
+  let nextInsertion = rod.insertion;
+  let nextCyclePhase = rod.cyclePhase;
+
+  const hasDirectional = Boolean(
+    input.directional &&
+      (input.directional.left || input.directional.right || input.directional.up || input.directional.down),
+  );
 
   if (rod.held && input.pointerPos) {
     const targetX = Math.max(-0.75, Math.min(0.75, input.pointerPos.x - rod.grabOffsetX));
@@ -196,15 +246,62 @@ export function stepVerticalRod(rod: VerticalRodState, input: VerticalRodStepInp
     vy = (targetY - rod.y) / safeDt;
     nextX = targetX;
     nextY = targetY;
-  } else if (input.directional && (input.directional.left || input.directional.right || input.directional.up || input.directional.down)) {
+    const distFromIntroitusX = Math.abs(nextX - INTROITUS_ENTRY_ANCHOR.x);
+    if (distFromIntroitusX < 0.095) {
+      const tipY = nextY - rod.halfLength;
+      nextInsertion = Math.max(0, Math.min(1, (0.28 - tipY) / 0.34));
+    } else {
+      nextInsertion = 0;
+    }
+  } else if (hasDirectional && input.directional) {
     const stepped = stepGuidedPosition({ x: rod.x, y: rod.y }, input.directional, safeDt, 0.54);
     nextX = stepped.x;
     nextY = stepped.y;
     vx = stepped.vx;
     vy = stepped.vy;
+    const distFromIntroitusX = Math.abs(nextX - INTROITUS_ENTRY_ANCHOR.x);
+    if (distFromIntroitusX < 0.095) {
+      const tipY = nextY - rod.halfLength;
+      nextInsertion = Math.max(0, Math.min(1, (0.28 - tipY) / 0.34));
+    } else {
+      nextInsertion = 0;
+    }
+  } else if (input.autoCycle?.enabled) {
+    const rate = Math.max(0.2, Math.min(2.4, input.autoCycle.rateHz));
+    const preset = input.autoCycle.preset;
+    const arousalBoost = 1 + (input.arousal ?? 0) * 0.1;
+
+    // Organic cadence waveform: harmonious gently lingers at full depth; slow glides smoothly; fast drives briskly
+    const baseOmega = Math.PI * 2 * rate;
+    const waveMod =
+      preset === 'harmonious'
+        ? 1 + 0.18 * Math.cos(rod.cyclePhase)
+        : preset === 'slow'
+          ? 1 + 0.08 * Math.cos(rod.cyclePhase)
+          : 1;
+    nextCyclePhase = (rod.cyclePhase + baseOmega * waveMod * safeDt) % (Math.PI * 2);
+
+    const depthMax = CADENCE_PRESETS[preset].strokeDepth * arousalBoost;
+    const rawSine = 0.5 - 0.5 * Math.cos(nextCyclePhase);
+    // Smooth plateau rounding at peak depth in harmonious mode
+    const shaped = preset === 'harmonious' ? Math.pow(rawSine, 0.85) : rawSine;
+    nextInsertion = Math.max(0.04, Math.min(1.0, 0.04 + shaped * Math.min(0.96, depthMax)));
+
+    // Align smoothly toward midline introitus anchor as cyclic motion runs
+    const targetX = INTROITUS_ENTRY_ANCHOR.x + Math.sin(nextCyclePhase * 0.5) * 0.008;
+    // Center Y glides upward (negative Y) as insertion increases so shaft travels in and out of introitus
+    const withdrawnCenterY = 0.54;
+    const insertedCenterY = 0.24;
+    const targetY = withdrawnCenterY - nextInsertion * (withdrawnCenterY - insertedCenterY);
+
+    nextX = rod.x + (targetX - rod.x) * Math.min(1, safeDt * 9.5);
+    nextY = rod.y + (targetY - rod.y) * Math.min(1, safeDt * 14);
+    vx = (nextX - rod.x) / safeDt;
+    vy = (nextY - rod.y) / safeDt;
   } else {
     vx = rod.vx * Math.exp(-safeDt * 14);
     vy = rod.vy * Math.exp(-safeDt * 14);
+    nextInsertion = rod.insertion * Math.exp(-safeDt * 4);
   }
 
   let nextSteerAngle = rod.steerAngle;
@@ -212,7 +309,6 @@ export function stepVerticalRod(rod: VerticalRodState, input: VerticalRodStepInp
     nextSteerAngle = Math.max(-0.48, Math.min(0.48, nextSteerAngle + input.tiltInput * 1.15 * safeDt));
   }
 
-  // Subtle dynamic lean during horizontal steering while honoring user's steered angle
   const motionLean = Math.max(-0.18, Math.min(0.18, vx * 0.14));
   const targetAngle = Math.max(-0.55, Math.min(0.55, nextSteerAngle + motionLean));
   const nextAngle = rod.angle + (targetAngle - rod.angle) * Math.min(1, safeDt * 10);
@@ -225,5 +321,7 @@ export function stepVerticalRod(rod: VerticalRodState, input: VerticalRodStepInp
     vy,
     angle: nextAngle,
     steerAngle: nextSteerAngle,
+    insertion: nextInsertion,
+    cyclePhase: nextCyclePhase,
   };
 }

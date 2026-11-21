@@ -4,7 +4,6 @@ import type {
   PhysiologicalState,
   PointerContact,
   SpringNode,
-  TactileToolId,
   TissueMeshState,
   VerticalRodState,
 } from './types';
@@ -97,15 +96,16 @@ function traceSmoothCurve(
 
 export class AnatomyRenderer {
   private skinGrainPattern: CanvasPattern | null = null;
-  private mucosaGrainPattern: CanvasPattern | null = null;
   private backdropCanvas: HTMLCanvasElement | null = null;
   private backdropKey = '';
+  private vignetteCanvas: HTMLCanvasElement | null = null;
+  private vignetteKey = '';
 
   private ensurePatterns(ctx: CanvasRenderingContext2D) {
-    if (this.skinGrainPattern && this.mucosaGrainPattern) return;
+    if (this.skinGrainPattern) return;
     if (typeof document === 'undefined') return;
 
-    // 1. Tileable dermal micro-texture (fine pores & subtle organic grain)
+    // Tileable dermal micro-texture (baked into cached studio backdrop)
     const skinTile = document.createElement('canvas');
     skinTile.width = 192;
     skinTile.height = 192;
@@ -128,7 +128,6 @@ export class AnatomyRenderer {
         sctx.arc(px, py, r, 0, Math.PI * 2);
         sctx.fill();
       }
-      // Very subtle fine pore micro-creases
       sctx.strokeStyle = 'rgba(85, 42, 36, 0.025)';
       sctx.lineWidth = 0.6;
       for (let i = 0; i < 160; i++) {
@@ -143,33 +142,6 @@ export class AnatomyRenderer {
       }
       this.skinGrainPattern = ctx.createPattern(skinTile, 'repeat');
     }
-
-    // 2. Tileable fine mucosal texture (micro-rugae / soft damp sheen variation)
-    const mucTile = document.createElement('canvas');
-    mucTile.width = 160;
-    mucTile.height = 160;
-    const mctx = mucTile.getContext('2d');
-    if (mctx) {
-      let seed = 4242;
-      const rand = () => {
-        seed = (seed * 16807) % 2147483647;
-        return (seed - 1) / 2147483646;
-      };
-      for (let i = 0; i < 1400; i++) {
-        const px = rand() * 160;
-        const py = rand() * 160;
-        const rx = 0.6 + rand() * 1.6;
-        const ry = 1.2 + rand() * 3.2;
-        mctx.fillStyle =
-          rand() > 0.5
-            ? `rgba(255, 210, 214, ${(0.012 + rand() * 0.022).toFixed(3)})`
-            : `rgba(45, 10, 18, ${(0.018 + rand() * 0.026).toFixed(3)})`;
-        mctx.beginPath();
-        mctx.ellipse(px, py, rx, ry, (rand() - 0.5) * 0.4, 0, Math.PI * 2);
-        mctx.fill();
-      }
-      this.mucosaGrainPattern = ctx.createPattern(mucTile, 'repeat');
-    }
   }
 
   private renderBackdropCached(
@@ -178,8 +150,7 @@ export class AnatomyRenderer {
     congestion: number,
   ) {
     if (typeof document === 'undefined') return;
-    const quantCongestion = Math.round(congestion * 25);
-    const key = `${Math.round(vt.width)}x${Math.round(vt.height)}:${quantCongestion}`;
+    const key = `${Math.round(vt.width)}x${Math.round(vt.height)}`;
 
     if (!this.backdropCanvas) {
       this.backdropCanvas = document.createElement('canvas');
@@ -205,11 +176,60 @@ export class AnatomyRenderer {
         bctx.fillStyle = bgGrad;
         bctx.fillRect(0, 0, vt.width, vt.height);
 
-        this.drawPelvicFrame(bctx, vt, quantCongestion / 25, 0);
+        this.drawPelvicFrame(bctx, vt, 0.15, 0);
       }
     }
 
     ctx.drawImage(this.backdropCanvas, 0, 0, vt.width, vt.height);
+
+    if (congestion > 0.06) {
+      const blushGrad = ctx.createRadialGradient(
+        vt.centerX,
+        vt.centerY - vt.scale * 0.04,
+        vt.scale * 0.05,
+        vt.centerX,
+        vt.centerY,
+        vt.scale * 0.75,
+      );
+      blushGrad.addColorStop(0, `rgba(196, 88, 96, ${(congestion * 0.16).toFixed(3)})`);
+      blushGrad.addColorStop(0.55, `rgba(164, 72, 78, ${(congestion * 0.08).toFixed(3)})`);
+      blushGrad.addColorStop(1, 'rgba(164, 72, 78, 0)');
+      ctx.fillStyle = blushGrad;
+      ctx.fillRect(0, 0, vt.width, vt.height);
+    }
+  }
+
+  private renderVignetteCached(ctx: CanvasRenderingContext2D, vt: ViewportTransform) {
+    if (typeof document === 'undefined') return;
+    const w = Math.max(1, Math.round(vt.width));
+    const h = Math.max(1, Math.round(vt.height));
+    const key = `${w}x${h}`;
+
+    if (!this.vignetteCanvas) {
+      this.vignetteCanvas = document.createElement('canvas');
+    }
+    if (this.vignetteKey !== key) {
+      this.vignetteKey = key;
+      this.vignetteCanvas.width = w;
+      this.vignetteCanvas.height = h;
+      const vctx = this.vignetteCanvas.getContext('2d');
+      if (vctx) {
+        const vig = vctx.createRadialGradient(
+          vt.centerX,
+          vt.centerY,
+          vt.scale * 0.78,
+          vt.centerX,
+          vt.centerY,
+          vt.scale * 1.45,
+        );
+        vig.addColorStop(0, 'rgba(9, 7, 8, 0)');
+        vig.addColorStop(0.68, 'rgba(9, 7, 8, 0.28)');
+        vig.addColorStop(1, 'rgba(9, 7, 8, 0.92)');
+        vctx.fillStyle = vig;
+        vctx.fillRect(0, 0, w, h);
+      }
+    }
+    ctx.drawImage(this.vignetteCanvas, 0, 0, vt.width, vt.height);
   }
 
   public render(
@@ -221,9 +241,6 @@ export class AnatomyRenderer {
     contact: PointerContact,
     hoveredZone: AnatomicalZone,
     showLabels: boolean,
-    showFinger = true,
-    hoverPos: { x: number; y: number } | null = null,
-    activeTool: TactileToolId = 'finger',
     rod: VerticalRodState | null = null,
   ) {
     this.ensurePatterns(ctx);
@@ -255,30 +272,15 @@ export class AnatomyRenderer {
     // 6. Cohesive Moisture Films, Gravity-Driven Beads, & Skene's Gland Emission Streams
     this.drawMoistureLayer(ctx, vt, mesh, physiology);
 
-    // 7. Soft Studio Vignette Edge Blending
-    const vig = ctx.createRadialGradient(
-      vt.centerX,
-      vt.centerY,
-      vt.scale * 0.78,
-      vt.centerX,
-      vt.centerY,
-      vt.scale * 1.45,
-    );
-    vig.addColorStop(0, 'rgba(9, 7, 8, 0)');
-    vig.addColorStop(0.68, 'rgba(9, 7, 8, 0.28)');
-    vig.addColorStop(1, 'rgba(9, 7, 8, 0.92)');
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, width, height);
+    // 7. Cached Soft Studio Vignette Edge Blending
+    this.renderVignetteCached(ctx, vt);
 
-    // 8. Subtle Tactile Contact Caliper Ring, Graspable Vertical Rod & Active Surface Tool
+    // 8. Subtle Tactile Contact Caliper Ring & Rhythmic Entering/Exiting Anatomical Member
     if (contact.active || hoveredZone !== 'none') {
       this.drawContactCue(ctx, vt, contact, physiology.discomfort);
     }
-    if (showFinger && rod) {
-      this.drawVerticalRod(ctx, vt, rod, contact, physiology.discomfort, activeTool === 'rod');
-    }
-    if (showFinger && activeTool !== 'rod' && (contact.active || hoverPos !== null)) {
-      this.drawSurfaceTool(ctx, vt, contact, hoverPos, physiology.discomfort, activeTool);
+    if (rod) {
+      this.drawVerticalRod(ctx, vt, rod, contact, physiology.discomfort, physiology.moisture);
     }
 
     // 9. Optional Clinical Reference Labels
@@ -483,11 +485,6 @@ export class AnatomyRenderer {
     vestGrad.addColorStop(1, lerpRgb([134, 72, 78], [76, 24, 36], congestion));
     ctx.fillStyle = vestGrad;
     ctx.fill();
-
-    if (this.mucosaGrainPattern) {
-      ctx.fillStyle = this.mucosaGrainPattern;
-      ctx.fill();
-    }
 
     // Urethral Meatus & Paraurethral (Skene's) Gland Ducts: secluded above the vaginal vestibule inlet (y = -0.145)
     // Only clearly visible when cleft opens or during periurethral emission; at rest tucked inside anterior folds
@@ -713,11 +710,6 @@ export class AnatomyRenderer {
       ctx.fillStyle = grad;
       ctx.fill();
 
-      if (this.mucosaGrainPattern) {
-        ctx.fillStyle = this.mucosaGrainPattern;
-        ctx.fill();
-      }
-
       // Delicate mucosal micro-creases along the labial fold
       ctx.strokeStyle = lerpRgba([92, 34, 42], [48, 10, 20], congestion, 0.24);
       ctx.lineWidth = Math.max(0.6, vt.scale * 0.0022);
@@ -885,11 +877,6 @@ export class AnatomyRenderer {
 
     ctx.fillStyle = hoodGrad;
     ctx.fill();
-
-    if (this.skinGrainPattern) {
-      ctx.fillStyle = this.skinGrainPattern;
-      ctx.fill();
-    }
 
     // Prepuce rim crease & gentle studio highlight
     ctx.beginPath();
@@ -1207,63 +1194,64 @@ export class AnatomyRenderer {
     ctx.restore();
   }
 
-  private drawSurfaceTool(
-    ctx: CanvasRenderingContext2D,
-    vt: ViewportTransform,
-    contact: PointerContact,
-    hoverPos: { x: number; y: number } | null,
-    discomfort: number,
-    activeTool: TactileToolId,
-  ) {
-    if (activeTool === 'brush') {
-      this.drawSoftBrushTool(ctx, vt, contact, hoverPos);
-      return;
-    }
-    if (activeTool === 'palm') {
-      this.drawWarmPalmTool(ctx, vt, contact, hoverPos);
-      return;
-    }
-    if (activeTool === 'probe') {
-      this.drawClinicalProbeTool(ctx, vt, contact, hoverPos, discomfort);
-      return;
-    }
-    this.drawSurfaceTouchFinger(ctx, vt, contact, hoverPos, discomfort);
-  }
-
   private drawVerticalRod(
     ctx: CanvasRenderingContext2D,
     vt: ViewportTransform,
     rod: VerticalRodState,
     contact: PointerContact,
     discomfort: number,
-    isRodSelected: boolean,
+    moisture: number,
   ) {
     const cx = vt.centerX + rod.x * vt.scale;
     const cy = vt.centerY + rod.y * vt.scale;
     const r = rod.radius * vt.scale;
     const halfLen = rod.halfLength * vt.scale;
-    const isActive = rod.held || (isRodSelected && contact.active);
+    const insertion = clamp01(rod.insertion ?? 0);
+    const isActive = rod.held || insertion > 0.05 || contact.active;
     const pressure = isActive ? contact.pressure : 0.14;
-    const liftPx = (isActive ? (1 - pressure) * 0.008 : 0.026) * vt.scale;
+    const liftPx = (isActive ? (1 - pressure) * 0.004 : 0.020) * vt.scale;
+    const introitusRimY = vt.centerY + 0.175 * vt.scale;
 
     ctx.save();
 
-    // 1. Soft studio drop shadow onto skin surface
+    // When entering the introitus, clip along a smooth curved anterior pocket arch matching the parted vestibule walls
+    const archY = introitusRimY - r * (0.72 + insertion * 0.24);
+    if (insertion > 0.09) {
+      ctx.beginPath();
+      ctx.moveTo(0, introitusRimY + r * 0.55);
+      ctx.lineTo(cx - r * 1.38, introitusRimY + r * 0.26);
+      ctx.bezierCurveTo(
+        cx - r * 0.95,
+        archY,
+        cx + r * 0.95,
+        archY,
+        cx + r * 1.38,
+        introitusRimY + r * 0.26,
+      );
+      ctx.lineTo(vt.width, introitusRimY + r * 0.55);
+      ctx.lineTo(vt.width, vt.height);
+      ctx.lineTo(0, vt.height);
+      ctx.closePath();
+      ctx.clip();
+    }
+
+    // 1. Soft studio cast shadow onto perineum & skin surface
     ctx.save();
     ctx.translate(cx + liftPx * 0.55, cy + liftPx * 0.65);
     ctx.rotate(rod.angle);
-    const shadowGrad = ctx.createRadialGradient(0, 0, r * 0.35, 0, 0, halfLen * 1.18);
-    shadowGrad.addColorStop(0, `rgba(18, 6, 8, ${(isActive ? 0.36 + pressure * 0.18 : 0.22).toFixed(3)})`);
-    shadowGrad.addColorStop(0.65, `rgba(18, 6, 8, ${(isActive ? 0.18 : 0.10).toFixed(3)})`);
-    shadowGrad.addColorStop(1, 'rgba(18, 6, 8, 0)');
+    const shadowGrad = ctx.createRadialGradient(0, 0, r * 0.35, 0, 0, halfLen * 1.12);
+    shadowGrad.addColorStop(0, `rgba(16, 5, 8, ${(isActive ? 0.36 + pressure * 0.14 : 0.20).toFixed(3)})`);
+    shadowGrad.addColorStop(0.62, `rgba(16, 5, 8, ${(isActive ? 0.16 : 0.08).toFixed(3)})`);
+    shadowGrad.addColorStop(1, 'rgba(16, 5, 8, 0)');
     ctx.fillStyle = shadowGrad;
     ctx.beginPath();
-    ctx.ellipse(0, 0, r * 1.85, halfLen * 1.14, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, r * 1.55, halfLen * 1.08, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // 2. Elongated vertical cylindrical capsule body
-    ctx.translate(cx + liftPx * 0.18, cy - liftPx * 0.25);
+    // 2. Sculpted anatomical cylindrical body & rounded glans contour
+    ctx.save();
+    ctx.translate(cx + liftPx * 0.15, cy - liftPx * 0.2);
     ctx.rotate(rod.angle);
 
     const w = r * 2;
@@ -1271,55 +1259,63 @@ export class AnatomyRenderer {
     ctx.beginPath();
     ctx.roundRect(-r, -halfLen, w, h, r);
 
-    // 3D cylindrical studio shading (upper-left key light -> soft satin wrap)
+    // Warm anatomical skin/vascular studio shading (upper-left key light)
     const bodyGrad = ctx.createLinearGradient(-r, 0, r, 0);
-    const baseAlpha = isActive ? 0.88 : rod.hovered ? 0.82 : isRodSelected ? 0.78 : 0.72;
-    bodyGrad.addColorStop(0, `rgba(214, 198, 194, ${baseAlpha.toFixed(3)})`);
-    bodyGrad.addColorStop(0.28, `rgba(250, 242, 238, ${Math.min(0.95, baseAlpha + 0.08).toFixed(3)})`);
-    bodyGrad.addColorStop(0.66, `rgba(218, 200, 196, ${baseAlpha.toFixed(3)})`);
-    bodyGrad.addColorStop(1, `rgba(154, 134, 132, ${baseAlpha.toFixed(3)})`);
+    const baseAlpha = isActive ? 0.95 : rod.hovered ? 0.90 : 0.85;
+    bodyGrad.addColorStop(0, `rgba(176, 118, 108, ${baseAlpha.toFixed(3)})`);
+    bodyGrad.addColorStop(0.28, `rgba(224, 168, 154, ${Math.min(0.98, baseAlpha + 0.03).toFixed(3)})`);
+    bodyGrad.addColorStop(0.65, `rgba(186, 124, 114, ${baseAlpha.toFixed(3)})`);
+    bodyGrad.addColorStop(1, `rgba(120, 68, 66, ${baseAlpha.toFixed(3)})`);
     ctx.fillStyle = bodyGrad;
     ctx.fill();
 
-    // Vertical tonal taper so distal tip feels smoothly contoured
+    // Subtle deeper vascular warmth along distal glans + soft entry depth shading
     const vertGrad = ctx.createLinearGradient(0, -halfLen, 0, halfLen);
-    vertGrad.addColorStop(0, 'rgba(255, 250, 248, 0.24)');
-    vertGrad.addColorStop(0.22, 'rgba(255, 250, 248, 0.02)');
-    vertGrad.addColorStop(0.85, 'rgba(72, 52, 54, 0.10)');
-    vertGrad.addColorStop(1, 'rgba(46, 30, 34, 0.22)');
+    vertGrad.addColorStop(0, `rgba(164, 74, 82, ${(0.34 + insertion * 0.25).toFixed(3)})`);
+    vertGrad.addColorStop(0.20, 'rgba(168, 84, 88, 0.14)');
+    vertGrad.addColorStop(0.42, 'rgba(255, 224, 212, 0.04)');
+    vertGrad.addColorStop(0.86, 'rgba(54, 26, 28, 0.16)');
+    vertGrad.addColorStop(1, 'rgba(32, 14, 18, 0.34)');
     ctx.fillStyle = vertGrad;
     ctx.fill();
 
-    // Subtle hairline outer contour (highlights softly when hovered or held)
-    const strokeRgb = discomfort > 0.35 ? '242, 182, 168' : '255, 248, 244';
-    const strokeAlpha = rod.held ? 0.78 : rod.hovered ? 0.62 : 0.36;
-    ctx.strokeStyle = `rgba(${strokeRgb}, ${strokeAlpha})`;
-    ctx.lineWidth = rod.held || rod.hovered ? 1.5 : 1.1;
+    // Corona ridge subtle sculptural contour dividing distal glans from shaft
+    const coronaY = -halfLen + r * 1.45;
+    ctx.strokeStyle = 'rgba(104, 42, 48, 0.42)';
+    ctx.lineWidth = Math.max(1.2, r * 0.075);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.92, coronaY);
+    ctx.quadraticCurveTo(0, coronaY + r * 0.26, r * 0.92, coronaY);
     ctx.stroke();
 
-    // Longitudinal studio specular reflection strip along left-front curvature
+    // Subtle hairline outer contour
+    const strokeRgb = discomfort > 0.35 ? '242, 182, 168' : '248, 224, 214';
+    const strokeAlpha = rod.held ? 0.65 : rod.hovered ? 0.5 : 0.28;
+    ctx.strokeStyle = `rgba(${strokeRgb}, ${strokeAlpha})`;
+    ctx.lineWidth = rod.held || rod.hovered ? 1.4 : 1.0;
     ctx.beginPath();
-    ctx.roundRect(-r * 0.56, -halfLen + r * 0.72, r * 0.28, h - r * 1.44, r * 0.14);
-    ctx.fillStyle = `rgba(255, 254, 252, ${(isActive ? 0.44 : 0.32).toFixed(3)})`;
+    ctx.roundRect(-r, -halfLen, w, h, r);
+    ctx.stroke();
+
+    // Longitudinal moist studio highlight along left-front curvature (glistens with moisture)
+    const sheenAlpha = 0.2 + moisture * 0.44 + (insertion > 0.1 ? 0.12 : 0);
+    ctx.beginPath();
+    ctx.roundRect(-r * 0.54, -halfLen + r * 0.68, r * 0.26, h - r * 1.38, r * 0.13);
+    ctx.fillStyle = `rgba(255, 244, 240, ${clamp01(sheenAlpha).toFixed(3)})`;
     ctx.fill();
 
-    // Tactile grip collar band in center-lower shaft (communicates graspable handle)
-    const gripTop = -halfLen * 0.10;
-    const gripHeight = halfLen * 0.52;
+    // Tactile grip collar band near the base for manual grab/steering
+    const gripTop = halfLen * 0.22;
+    const gripHeight = halfLen * 0.46;
     ctx.save();
     ctx.beginPath();
     ctx.roundRect(-r, gripTop, w, gripHeight, 2);
     ctx.clip();
-    ctx.fillStyle = rod.held
-      ? 'rgba(132, 108, 108, 0.24)'
-      : rod.hovered
-        ? 'rgba(142, 118, 118, 0.18)'
-        : 'rgba(120, 100, 102, 0.14)';
+    ctx.fillStyle = rod.held ? 'rgba(90, 48, 48, 0.26)' : 'rgba(80, 42, 44, 0.16)';
     ctx.fillRect(-r, gripTop, w, gripHeight);
-
-    for (let i = 0; i < 4; i++) {
-      const gy = gripTop + gripHeight * (0.2 + i * 0.2);
-      ctx.strokeStyle = rod.held ? 'rgba(255, 244, 240, 0.52)' : 'rgba(94, 72, 74, 0.34)';
+    for (let i = 0; i < 3; i++) {
+      const gy = gripTop + gripHeight * (0.24 + i * 0.26);
+      ctx.strokeStyle = rod.held ? 'rgba(255, 232, 224, 0.46)' : 'rgba(66, 30, 32, 0.32)';
       ctx.lineWidth = 1.0;
       ctx.beginPath();
       ctx.moveTo(-r * 0.78, gy);
@@ -1328,319 +1324,28 @@ export class AnatomyRenderer {
     }
     ctx.restore();
 
-    // Subtle upper directional tip contour
-    ctx.beginPath();
-    ctx.ellipse(0, -halfLen + r * 0.62, r * 0.42, r * 0.26, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 252, 250, ${(isActive ? 0.34 : 0.22).toFixed(3)})`;
-    ctx.fill();
+    ctx.restore();
+    ctx.restore();
 
-    // Fine directional steering axis tick when hovered or held
-    if (rod.held || rod.hovered) {
-      ctx.strokeStyle = 'rgba(255, 248, 244, 0.45)';
-      ctx.lineWidth = 1;
+    // Soft feathered mucosal arch shadow & rim highlight hugging the parted entry pocket
+    if (insertion > 0.09) {
+      ctx.save();
+      ctx.strokeStyle = `rgba(42, 6, 14, ${(0.28 + insertion * 0.32).toFixed(3)})`;
+      ctx.lineWidth = Math.max(4, r * 0.28);
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(0, -halfLen - 6);
-      ctx.lineTo(0, -halfLen - 12);
+      ctx.moveTo(cx - r * 1.15, introitusRimY + r * 0.14);
+      ctx.quadraticCurveTo(cx, archY - r * 0.08, cx + r * 1.15, introitusRimY + r * 0.14);
       ctx.stroke();
-    }
 
-    ctx.restore();
-  }
-
-  private drawSoftBrushTool(
-    ctx: CanvasRenderingContext2D,
-    vt: ViewportTransform,
-    contact: PointerContact,
-    hoverPos: { x: number; y: number } | null,
-  ) {
-    const pos = contact.active ? { x: contact.x, y: contact.y } : hoverPos;
-    if (!pos) return;
-    const isPressed = contact.active;
-    const pressure = isPressed ? contact.pressure : 0.1;
-    const tipX = vt.centerX + pos.x * vt.scale;
-    const tipY = vt.centerY + pos.y * vt.scale;
-    const sway = clamp01(Math.abs(contact.vx) * 0.25) * Math.sign(contact.vx) * 0.16;
-
-    ctx.save();
-    ctx.translate(tipX, tipY);
-    ctx.rotate(-0.42 - sway);
-
-    // Soft fan-brush contact shadow on skin
-    const shadowGrad = ctx.createRadialGradient(4, 6, 2, 4, 6, vt.scale * 0.12);
-    shadowGrad.addColorStop(0, `rgba(28, 10, 12, ${(isPressed ? 0.22 : 0.10).toFixed(3)})`);
-    shadowGrad.addColorStop(1, 'rgba(28, 10, 12, 0)');
-    ctx.fillStyle = shadowGrad;
-    ctx.beginPath();
-    ctx.ellipse(4, 6, vt.scale * 0.10, vt.scale * 0.055, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Silky feathered fan bristles
-    const fanHeight = vt.scale * 0.15;
-    const fanHalfW = vt.scale * (0.075 + pressure * 0.015);
-    const bristleGrad = ctx.createLinearGradient(0, -vt.scale * 0.015, 0, fanHeight);
-    bristleGrad.addColorStop(0, `rgba(248, 240, 234, ${(isPressed ? 0.56 : 0.42).toFixed(3)})`);
-    bristleGrad.addColorStop(0.65, `rgba(210, 194, 188, ${(isPressed ? 0.68 : 0.50).toFixed(3)})`);
-    bristleGrad.addColorStop(1, 'rgba(155, 138, 134, 0.72)');
-
-    ctx.beginPath();
-    ctx.moveTo(-fanHalfW, 0);
-    ctx.quadraticCurveTo(0, -vt.scale * 0.025, fanHalfW, 0);
-    ctx.lineTo(vt.scale * 0.018, fanHeight);
-    ctx.lineTo(-vt.scale * 0.018, fanHeight);
-    ctx.closePath();
-    ctx.fillStyle = bristleGrad;
-    ctx.fill();
-
-    // Delicate individual fan hair strands
-    ctx.strokeStyle = 'rgba(255, 250, 246, 0.26)';
-    ctx.lineWidth = 0.7;
-    for (let i = -5; i <= 5; i++) {
-      const t = i / 5;
+      ctx.strokeStyle = `rgba(244, 198, 204, ${(0.18 + moisture * 0.28).toFixed(3)})`;
+      ctx.lineWidth = 1.3;
       ctx.beginPath();
-      ctx.moveTo(t * fanHalfW * 0.9, -Math.cos(t * 1.2) * vt.scale * 0.012);
-      ctx.lineTo(t * vt.scale * 0.014, fanHeight);
+      ctx.moveTo(cx - r * 1.15, introitusRimY + r * 0.14);
+      ctx.quadraticCurveTo(cx, archY - r * 0.08, cx + r * 1.15, introitusRimY + r * 0.14);
       ctx.stroke();
+      ctx.restore();
     }
-
-    // Ferrule collar & fading studio handle
-    const handleLen = vt.scale * 0.20;
-    const handleGrad = ctx.createLinearGradient(0, fanHeight, 0, fanHeight + handleLen);
-    handleGrad.addColorStop(0, 'rgba(195, 186, 182, 0.78)');
-    handleGrad.addColorStop(0.22, 'rgba(130, 118, 114, 0.58)');
-    handleGrad.addColorStop(1, 'rgba(100, 90, 88, 0)');
-    ctx.fillStyle = handleGrad;
-    ctx.beginPath();
-    ctx.roundRect(-vt.scale * 0.019, fanHeight - 2, vt.scale * 0.038, handleLen, 4);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  private drawWarmPalmTool(
-    ctx: CanvasRenderingContext2D,
-    vt: ViewportTransform,
-    contact: PointerContact,
-    hoverPos: { x: number; y: number } | null,
-  ) {
-    const pos = contact.active ? { x: contact.x, y: contact.y } : hoverPos;
-    if (!pos) return;
-    const isPressed = contact.active;
-    const pressure = isPressed ? contact.pressure : 0.1;
-    const tipX = vt.centerX + pos.x * vt.scale;
-    const tipY = vt.centerY + pos.y * vt.scale;
-    const palmR = vt.scale * (0.135 + pressure * 0.018);
-
-    ctx.save();
-
-    // Subtle therapeutic thermal warmth aura on outer skin
-    const warmthGrad = ctx.createRadialGradient(tipX, tipY, palmR * 0.15, tipX, tipY, palmR * 1.45);
-    warmthGrad.addColorStop(0, `rgba(242, 168, 138, ${(isPressed ? 0.26 : 0.12).toFixed(3)})`);
-    warmthGrad.addColorStop(0.55, `rgba(224, 142, 122, ${(isPressed ? 0.14 : 0.06).toFixed(3)})`);
-    warmthGrad.addColorStop(1, 'rgba(200, 120, 110, 0)');
-    ctx.fillStyle = warmthGrad;
-    ctx.beginPath();
-    ctx.arc(tipX, tipY, palmR * 1.45, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Soft translucent anatomical palm heel pad fading smoothly outward
-    ctx.translate(tipX + vt.scale * 0.025, tipY + vt.scale * 0.04);
-    ctx.rotate(-0.35);
-    const padGrad = ctx.createRadialGradient(-palmR * 0.15, -palmR * 0.15, palmR * 0.1, 0, 0, palmR);
-    const baseA = isPressed ? 0.44 : 0.30;
-    padGrad.addColorStop(0, `rgba(246, 232, 224, ${baseA})`);
-    padGrad.addColorStop(0.62, `rgba(222, 198, 188, ${(baseA * 0.72).toFixed(3)})`);
-    padGrad.addColorStop(1, 'rgba(196, 170, 162, 0)');
-    ctx.fillStyle = padGrad;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, palmR * 0.92, palmR * 1.12, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = `rgba(255, 240, 232, ${(isPressed ? 0.32 : 0.18).toFixed(3)})`;
-    ctx.lineWidth = 1.0;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, palmR * 0.74, palmR * 0.90, 0, Math.PI * 0.85, Math.PI * 1.95);
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  private drawClinicalProbeTool(
-    ctx: CanvasRenderingContext2D,
-    vt: ViewportTransform,
-    contact: PointerContact,
-    hoverPos: { x: number; y: number } | null,
-    discomfort: number,
-  ) {
-    const pos = contact.active ? { x: contact.x, y: contact.y } : hoverPos;
-    if (!pos) return;
-    const isPressed = contact.active;
-    const pressure = isPressed ? contact.pressure : 0.08;
-    const tipX = vt.centerX + pos.x * vt.scale;
-    const tipY = vt.centerY + pos.y * vt.scale;
-    const tipR = vt.scale * (0.016 + pressure * 0.004);
-
-    ctx.save();
-    ctx.translate(tipX, tipY);
-    ctx.rotate(-0.55);
-
-    // Small surface shadow under cotton/silicone sensor tip
-    ctx.fillStyle = `rgba(24, 8, 10, ${(isPressed ? 0.32 : 0.16).toFixed(3)})`;
-    ctx.beginPath();
-    ctx.arc(3, 4, tipR * 1.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Soft spherical cotton/silicone sensory tip (strictly surface contact)
-    const tipGrad = ctx.createRadialGradient(-tipR * 0.3, -tipR * 0.3, tipR * 0.1, 0, 0, tipR);
-    tipGrad.addColorStop(0, 'rgba(255, 252, 250, 0.94)');
-    tipGrad.addColorStop(0.65, 'rgba(228, 222, 220, 0.85)');
-    tipGrad.addColorStop(1, 'rgba(170, 162, 164, 0.72)');
-    ctx.fillStyle = tipGrad;
-    ctx.beginPath();
-    ctx.arc(0, 0, tipR, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = discomfort > 0.35 ? 'rgba(240, 175, 160, 0.7)' : 'rgba(255, 250, 248, 0.55)';
-    ctx.lineWidth = 0.9;
-    ctx.stroke();
-
-    // Slender clinical stem fading smoothly outward
-    const stemLen = vt.scale * 0.28;
-    const stemGrad = ctx.createLinearGradient(0, tipR * 0.8, 0, stemLen);
-    stemGrad.addColorStop(0, 'rgba(218, 214, 214, 0.72)');
-    stemGrad.addColorStop(0.55, 'rgba(176, 170, 172, 0.38)');
-    stemGrad.addColorStop(1, 'rgba(150, 144, 146, 0)');
-    ctx.strokeStyle = stemGrad;
-    ctx.lineWidth = Math.max(2.2, vt.scale * 0.0075);
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(0, tipR * 0.85);
-    ctx.lineTo(0, stemLen);
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  private drawSurfaceTouchFinger(
-    ctx: CanvasRenderingContext2D,
-    vt: ViewportTransform,
-    contact: PointerContact,
-    hoverPos: { x: number; y: number } | null,
-    discomfort: number,
-  ) {
-    const pos = contact.active ? { x: contact.x, y: contact.y } : hoverPos;
-    if (!pos) return;
-
-    const pressure = contact.active ? contact.pressure : 0.08;
-    const isPressed = contact.active;
-    const liftPx = (isPressed ? (1 - pressure) * 0.008 : 0.036) * vt.scale;
-
-    const tipX = vt.centerX + pos.x * vt.scale;
-    const tipY = vt.centerY + pos.y * vt.scale;
-    const padRadius = vt.scale * (0.044 + pressure * 0.008);
-
-    ctx.save();
-
-    // 1. Soft dermal contact shadow beneath the fingertip pad (tighter when touching skin)
-    const shadowGrad = ctx.createRadialGradient(
-      tipX + liftPx * 0.45,
-      tipY + liftPx * 0.55,
-      padRadius * 0.15,
-      tipX + liftPx * 0.45,
-      tipY + liftPx * 0.55,
-      padRadius * (isPressed ? 1.55 : 1.9),
-    );
-    shadowGrad.addColorStop(0, `rgba(24, 8, 10, ${(isPressed ? 0.28 + pressure * 0.22 : 0.14).toFixed(3)})`);
-    shadowGrad.addColorStop(1, 'rgba(24, 8, 10, 0)');
-    ctx.fillStyle = shadowGrad;
-    ctx.beginPath();
-    ctx.ellipse(
-      tipX + liftPx * 0.45,
-      tipY + liftPx * 0.55,
-      padRadius * 1.45,
-      padRadius * 1.75,
-      -0.48,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-
-    // 2. Frosted translucent clinical fingertip silhouette angled from lower-right (+x, +y)
-    ctx.translate(tipX + liftPx * 0.35, tipY - liftPx * 0.45);
-    ctx.rotate(-0.48);
-
-    const fingerWidth = padRadius * 1.95;
-    const fingerLength = vt.scale * 0.34;
-
-    ctx.beginPath();
-    // Rounded tactile distal tip centered near (0, 0)
-    ctx.moveTo(-fingerWidth * 0.46, 0);
-    ctx.bezierCurveTo(
-      -fingerWidth * 0.46,
-      -padRadius * 1.08,
-      fingerWidth * 0.46,
-      -padRadius * 1.08,
-      fingerWidth * 0.46,
-      0,
-    );
-    // Smooth taper down the distal & middle phalanx toward lower-right margin
-    ctx.bezierCurveTo(
-      fingerWidth * 0.52,
-      fingerLength * 0.38,
-      fingerWidth * 0.58,
-      fingerLength * 0.72,
-      fingerWidth * 0.62,
-      fingerLength,
-    );
-    ctx.lineTo(-fingerWidth * 0.58, fingerLength);
-    ctx.bezierCurveTo(
-      -fingerWidth * 0.54,
-      fingerLength * 0.72,
-      -fingerWidth * 0.50,
-      fingerLength * 0.38,
-      -fingerWidth * 0.46,
-      0,
-    );
-    ctx.closePath();
-
-    // Translucent frosted clinical shading fading smoothly along proximal shaft (no harsh cut edge)
-    const bodyGrad = ctx.createLinearGradient(0, -padRadius, 0, fingerLength);
-    const bodyAlpha = isPressed ? 0.62 : 0.46;
-    bodyGrad.addColorStop(0, `rgba(244, 234, 230, ${bodyAlpha})`);
-    bodyGrad.addColorStop(0.35, `rgba(222, 204, 198, ${(bodyAlpha * 0.88).toFixed(3)})`);
-    bodyGrad.addColorStop(0.72, `rgba(184, 160, 154, ${(bodyAlpha * 0.42).toFixed(3)})`);
-    bodyGrad.addColorStop(1, 'rgba(164, 140, 136, 0)');
-    ctx.fillStyle = bodyGrad;
-    ctx.fill();
-
-    // Subtle hairline silhouette border that also fades smoothly down the shaft
-    const strokeGrad = ctx.createLinearGradient(0, -padRadius, 0, fingerLength);
-    const strokeRgb = discomfort > 0.35 ? '242, 182, 168' : '255, 248, 244';
-    const strokeAlpha = isPressed ? 0.48 : 0.30;
-    strokeGrad.addColorStop(0, `rgba(${strokeRgb}, ${strokeAlpha})`);
-    strokeGrad.addColorStop(0.55, `rgba(${strokeRgb}, ${(strokeAlpha * 0.55).toFixed(3)})`);
-    strokeGrad.addColorStop(0.92, `rgba(${strokeRgb}, 0)`);
-    ctx.strokeStyle = strokeGrad;
-    ctx.lineWidth = 1.1;
-    ctx.stroke();
-
-    // Subtle clinical nail-plate contour near distal dorsal tip
-    ctx.beginPath();
-    ctx.ellipse(0, -padRadius * 0.14, fingerWidth * 0.27, padRadius * 0.58, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 248, 246, ${(isPressed ? 0.24 : 0.16).toFixed(3)})`;
-    ctx.fill();
-    ctx.strokeStyle = `rgba(255, 244, 240, ${(isPressed ? 0.28 : 0.18).toFixed(3)})`;
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-
-    // Subtle knuckle crease hint
-    ctx.strokeStyle = 'rgba(130, 102, 98, 0.20)';
-    ctx.lineWidth = 0.9;
-    ctx.beginPath();
-    ctx.moveTo(-fingerWidth * 0.28, fingerLength * 0.34);
-    ctx.quadraticCurveTo(0, fingerLength * 0.36, fingerWidth * 0.28, fingerLength * 0.34);
-    ctx.stroke();
-
-    ctx.restore();
   }
 
   private drawAnatomicalLabels(

@@ -49,6 +49,17 @@ export interface PhysiologicalState {
 
 export type TactileToolId = 'finger' | 'brush' | 'palm' | 'probe' | 'rod';
 
+export type CadencePreset = 'slow' | 'harmonious' | 'fast';
+
+export interface AutoCycleConfig {
+  /** Whether automated in-and-out motion is active */
+  enabled: boolean;
+  /** Selected rhythm preset: slow, harmonious (organic wave), or fast */
+  preset: CadencePreset;
+  /** Cycle frequency in Hz (strokes per second, 0.20..2.20) */
+  rateHz: number;
+}
+
 export interface VerticalRodState {
   /** Center X in normalized anatomical space (-1..1) */
   x: number;
@@ -65,6 +76,10 @@ export interface VerticalRodState {
   halfLength: number;
   /** Cross-sectional radius of the vertical capsule */
   radius: number;
+  /** Normalized insertion depth (0 = external/withdrawn, 1 = deep introital entry) */
+  insertion: number;
+  /** Continuous oscillator phase in radians for cyclic motion */
+  cyclePhase: number;
   /** True while the user is grasping/holding the vertical shape */
   held: boolean;
   /** True while pointer hovers over the vertical shape */
@@ -93,6 +108,8 @@ export interface PointerContact {
   friction: number;
   /** Active external tactile tool/element guiding the contact */
   tool?: TactileToolId;
+  /** Active cyclic insertion depth (0..1) when rhythmic member enters introitus */
+  insertion?: number;
 }
 
 export interface SpringNode {

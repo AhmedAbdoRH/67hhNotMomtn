@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createInitialPhysiology, stepPhysiology, computeSurfaceFriction } from './physiology';
 import { createInitialTissueMesh, stepTissueMesh, detectAnatomicalZone } from './tissuePhysics';
 import {
+  CADENCE_PRESETS,
+  createInitialAutoCycle,
   createInitialVerticalRod,
   hitTestVerticalRod,
   stepGuidedPosition,
@@ -565,6 +567,8 @@ test('vertical elongated rod can be hit-tested, grasped with offset, steered, ti
   // 2. Grasping with anchor offset preserves relative hold point during drag
   const heldRod = {
     ...rod,
+    x: 0.36,
+    y: 0.14,
     held: true,
     grabOffsetX: 0.01,
     grabOffsetY: 0.08,
@@ -575,7 +579,7 @@ test('vertical elongated rod can be hit-tested, grasped with offset, steered, ti
   });
   assert.ok(Math.abs(dragged.x - 0) < 1e-6);
   assert.ok(Math.abs(dragged.y - 0.04) < 1e-6);
-  assert.ok(dragged.vx < 0, 'dragging left from 0.42 to 0 should yield negative vx');
+  assert.ok(dragged.vx < 0, 'dragging left from 0.36 to 0 should yield negative vx');
 
   // 3. Directional steering & tilt clamping
   let steered = { ...rod };
@@ -606,6 +610,7 @@ test('vertical elongated rod can be hit-tested, grasped with offset, steered, ti
         pressure: 0.55,
         zone: 'vestibule',
         tool: 'rod',
+        insertion: 0.72,
       }),
       0.02,
     );
@@ -616,4 +621,56 @@ test('vertical elongated rod can be hit-tested, grasped with offset, steered, ti
   const restLowerGap = mesh.majoraRight[4].restX - mesh.majoraLeft[4].restX;
   assert.ok(upperGap > restUpperGap + 0.02, 'expected vertical rod to part upper cleft nodes');
   assert.ok(lowerGap > restLowerGap + 0.015, 'expected vertical rod to part lower cleft nodes');
+});
+
+test('automated cyclic member enters and exits smoothly across slow, harmonious, and fast cadences and dilates vestibule', () => {
+  const autoBase = createInitialAutoCycle();
+  assert.equal(autoBase.enabled, true);
+  assert.equal(autoBase.preset, 'harmonious');
+
+  const sampleCycle = (preset: 'slow' | 'harmonious' | 'fast', steps: number) => {
+    let r = createInitialVerticalRod();
+    const cfg = { enabled: true, preset, rateHz: CADENCE_PRESETS[preset].rateHz };
+    let minIns = Infinity;
+    let maxIns = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < steps; i++) {
+      r = stepVerticalRod(r, { dt: 0.03, autoCycle: cfg, arousal: 0.45 });
+      minIns = Math.min(minIns, r.insertion);
+      maxIns = Math.max(maxIns, r.insertion);
+      minY = Math.min(minY, r.y);
+      maxY = Math.max(maxY, r.y);
+    }
+    return { r, minIns, maxIns, minY, maxY };
+  };
+
+  const slow = sampleCycle('slow', 100);
+  const harmonious = sampleCycle('harmonious', 60);
+  const fast = sampleCycle('fast', 40);
+
+  assert.ok(slow.maxIns - slow.minIns > 0.45, `expected slow full in/out sweep, got ${slow.minIns}..${slow.maxIns}`);
+  assert.ok(harmonious.maxIns - harmonious.minIns > 0.65, `expected harmonious deep sweep, got ${harmonious.minIns}..${harmonious.maxIns}`);
+  assert.ok(fast.maxIns - fast.minIns > 0.75, `expected fast full cycle sweep, got ${fast.minIns}..${fast.maxIns}`);
+  assert.ok(harmonious.maxY - harmonious.minY > 0.14, 'expected vertical center Y to travel in and out of introitus');
+
+  // Verify vestibule stretches proportionally wider during insertion
+  const phys = { ...createInitialPhysiology(), arousal: 0.5, congestion: 0.45, vestibuleRelaxation: 0.5 };
+  let restMesh = createInitialTissueMesh();
+  let insertedMesh = createInitialTissueMesh();
+  for (let i = 0; i < 35; i++) {
+    restMesh = stepTissueMesh(restMesh, phys, makeContact({ active: false, insertion: 0 }), 0.025);
+    insertedMesh = stepTissueMesh(
+      insertedMesh,
+      phys,
+      makeContact({ active: true, x: 0, y: 0.25, vy: -0.4, zone: 'vestibule', tool: 'rod', insertion: 0.85 }),
+      0.025,
+    );
+  }
+  const restVestGap = restMesh.vestibuleRight[2].x - restMesh.vestibuleLeft[2].x;
+  const insertedVestGap = insertedMesh.vestibuleRight[2].x - insertedMesh.vestibuleLeft[2].x;
+  assert.ok(
+    insertedVestGap > restVestGap + 0.015,
+    `expected vestibule dilation during insertion (${insertedVestGap} > ${restVestGap})`,
+  );
 });
